@@ -44,8 +44,8 @@ const AttendancePage: React.FC = () => {
     setCurrentIndex((prev) => prev + 1);
   };
 
-  const handleSubmit = () => {
-    submitAttendanceSession();
+  const handleSubmit = async () => {
+    await submitAttendanceSession();
     navigate('/reports');
   };
 

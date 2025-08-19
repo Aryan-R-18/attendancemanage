@@ -1,18 +1,23 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAttendanceStore } from '../store/attendanceStore';
 import { Users, ChevronRight } from 'lucide-react';
 
 const SectionsPage: React.FC = () => {
   const navigate = useNavigate();
-  const { students, setSelectedSection } = useAttendanceStore();
+  const { students, setSelectedSection, getSectionNames, loadSections } = useAttendanceStore();
 
-  const handleSectionSelect = (section: string) => {
-    setSelectedSection(section);
+  useEffect(() => {
+    // Ensure sections are loaded if page is refreshed
+    loadSections().catch(() => undefined);
+  }, [loadSections]);
+
+  const handleSectionSelect = async (section: string) => {
+    await setSelectedSection(section);
     navigate('/attendance');
   };
 
-  const sections = Object.keys(students);
+  const sections = getSectionNames();
 
   return (
     <div className="space-y-8">
@@ -25,7 +30,7 @@ const SectionsPage: React.FC = () => {
       {/* Sections Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {sections.map((section) => {
-          const studentCount = students[section].length;
+          const studentCount = (students[section] || []).length;
           
           return (
             <button

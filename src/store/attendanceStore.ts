@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { signIn, setToken as apiSetToken, getSections, getStudentsBySection, markAttendance as apiMarkAttendance } from '../lib/api';
 
 export interface Student {
   id: string;
@@ -30,10 +31,12 @@ interface AttendanceState {
   // Auth
   isAuthenticated: boolean;
   teacherName: string;
+  token: string | null;
   
   // Current session
-  selectedSection: string;
+  selectedSection: string; // section name (display)
   currentSessionId: string;
+  sectionNameToId: Record<string, string>; // display name -> sectionId
   
   // Students data
   students: Record<string, Student[]>;
@@ -47,46 +50,21 @@ interface AttendanceState {
   processedStudents: string[];
   
   // Actions
-  login: (email: string, password: string) => boolean;
+  login: (email: string, password: string) => Promise<boolean>;
   logout: () => void;
-  setSelectedSection: (section: string) => void;
+  loadSections: () => Promise<void>;
+  setSelectedSection: (sectionName: string) => Promise<void>;
   startAttendanceSession: () => void;
   markAttendance: (studentId: string, status: 'present' | 'absent') => void;
-  submitAttendanceSession: () => void;
+  submitAttendanceSession: () => Promise<void>;
   updateAttendanceStatus: (sessionId: string, studentId: string, newStatus: 'present' | 'absent') => void;
   getStudentHistory: (studentId: string, section: string) => AttendanceRecord[];
   getAttendancePercentage: (studentId: string, section: string, month?: number, year?: number) => number;
+  getSectionNames: () => string[];
 }
 
-// Mock student data
-const mockStudents: Record<string, Student[]> = {
-  'Section A': [
-    { id: '1', name: 'Alice Johnson', rollNumber: 'A001' },
-    { id: '2', name: 'Bob Smith', rollNumber: 'A002' },
-    { id: '3', name: 'Charlie Brown', rollNumber: 'A003' },
-    { id: '4', name: 'Diana Prince', rollNumber: 'A004' },
-    { id: '5', name: 'Edward Norton', rollNumber: 'A005' },
-    { id: '6', name: 'Fiona Apple', rollNumber: 'A006' },
-    { id: '7', name: 'George Washington', rollNumber: 'A007' },
-    { id: '8', name: 'Helen Keller', rollNumber: 'A008' },
-  ],
-  'Section B': [
-    { id: '9', name: 'Ivan Petrov', rollNumber: 'B001' },
-    { id: '10', name: 'Julia Roberts', rollNumber: 'B002' },
-    { id: '11', name: 'Kevin Hart', rollNumber: 'B003' },
-    { id: '12', name: 'Linda Hamilton', rollNumber: 'B004' },
-    { id: '13', name: 'Michael Jordan', rollNumber: 'B005' },
-    { id: '14', name: 'Natalie Portman', rollNumber: 'B006' },
-  ],
-  'Section C': [
-    { id: '15', name: 'Oliver Twist', rollNumber: 'C001' },
-    { id: '16', name: 'Penelope Cruz', rollNumber: 'C002' },
-    { id: '17', name: 'Quincy Jones', rollNumber: 'C003' },
-    { id: '18', name: 'Rachel Green', rollNumber: 'C004' },
-    { id: '19', name: 'Samuel Jackson', rollNumber: 'C005' },
-    { id: '20', name: 'Tina Turner', rollNumber: 'C006' },
-  ],
-};
+// Initially empty; will be populated from backend
+const initialStudents: Record<string, Student[]> = {};
 
 export const useAttendanceStore = create<AttendanceState>()(
   persist(
@@ -94,40 +72,63 @@ export const useAttendanceStore = create<AttendanceState>()(
       // Initial state
       isAuthenticated: false,
       teacherName: '',
+      token: null,
       selectedSection: '',
       currentSessionId: '',
-      students: mockStudents,
+      sectionNameToId: {},
+      students: initialStudents,
       attendanceSessions: [],
       attendanceHistory: [],
       currentAttendance: {},
       processedStudents: [],
 
       // Actions
-      login: (email: string, password: string) => {
-        // Mock authentication - any email/password combo works
-        if (email && password) {
-          set({ 
-            isAuthenticated: true, 
-            teacherName: email.split('@')[0] 
-          });
+      login: async (email: string, password: string) => {
+        try {
+          const result = await signIn({ email, password });
+          apiSetToken(result.token);
+          set({ isAuthenticated: true, teacherName: email.split('@')[0], token: result.token });
           return true;
+        } catch {
+          return false;
         }
-        return false;
       },
 
       logout: () => {
         set({ 
           isAuthenticated: false, 
           teacherName: '',
+          token: null,
           selectedSection: '',
           currentSessionId: '',
           currentAttendance: {},
           processedStudents: []
         });
+        apiSetToken(null);
       },
 
-      setSelectedSection: (section: string) => {
-        set({ selectedSection: section });
+      loadSections: async () => {
+        const sections = await getSections();
+        const mapping: Record<string, string> = {};
+        sections.forEach(s => {
+          const display = `${s.name} (${s.branch} ${s.year})`;
+          mapping[display] = s._id;
+        });
+        set({ sectionNameToId: mapping });
+      },
+
+      setSelectedSection: async (sectionName: string) => {
+        const state = get();
+        set({ selectedSection: sectionName });
+        // Load students for this section if not already loaded
+        if (!state.students[sectionName]) {
+          const sectionId = state.sectionNameToId[sectionName];
+          if (sectionId) {
+            const apiStudents = await getStudentsBySection(sectionId);
+            const mapped: Student[] = apiStudents.map(s => ({ id: s._id, name: s.name, rollNumber: s.studentId }));
+            set({ students: { ...get().students, [sectionName]: mapped } });
+          }
+        }
       },
 
       startAttendanceSession: () => {
@@ -155,7 +156,7 @@ export const useAttendanceStore = create<AttendanceState>()(
         });
       },
 
-      submitAttendanceSession: () => {
+      submitAttendanceSession: async () => {
         const state = get();
         const now = new Date();
         const date = now.toLocaleDateString();
@@ -191,6 +192,21 @@ export const useAttendanceStore = create<AttendanceState>()(
           records
         };
         
+        // Fire-and-forget create attendance on backend (best-effort)
+        try {
+          const sectionId = state.sectionNameToId[state.selectedSection];
+          if (sectionId) {
+            await apiMarkAttendance({
+              sectionId,
+              date: now.toISOString(),
+              markedBy: state.teacherName || 'teacher',
+              records: records.map(r => ({ student: r.studentId, status: r.status === 'present' ? 'Present' : 'Absent' }))
+            });
+          }
+        } catch {
+          // swallow to avoid blocking UI; could add a toast in future
+        }
+
         set({
           attendanceSessions: [...state.attendanceSessions, session],
           attendanceHistory: [...state.attendanceHistory, ...records],
@@ -269,9 +285,19 @@ export const useAttendanceStore = create<AttendanceState>()(
         const presentCount = records.filter(record => record.status === 'present').length;
         return Math.round((presentCount / records.length) * 100);
       },
+
+      getSectionNames: () => Object.keys(get().sectionNameToId),
     }),
     {
       name: 'attendance-storage',
+      onRehydrateStorage: () => (state) => {
+        try {
+          const token = state?.token || null;
+          apiSetToken(token);
+        } catch {
+          // ignore
+        }
+      },
     }
   )
 );

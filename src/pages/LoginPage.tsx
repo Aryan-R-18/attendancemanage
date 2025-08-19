@@ -9,15 +9,19 @@ const LoginPage: React.FC = () => {
   const [error, setError] = useState('');
   const navigate = useNavigate();
   const login = useAttendanceStore((state) => state.login);
+  const loadSections = useAttendanceStore((state) => state.loadSections);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-
-    if (login(email, password)) {
+    const ok = await login(email, password);
+    if (ok) {
+      try {
+        await loadSections();
+      } catch {}
       navigate('/sections');
     } else {
-      setError('Please enter valid credentials');
+      setError('Invalid credentials');
     }
   };
 
@@ -94,7 +98,7 @@ const LoginPage: React.FC = () => {
 
           <div className="mt-6 p-4 bg-blue-50 rounded-lg">
             <p className="text-sm text-blue-800">
-              <strong>Demo Login:</strong> Use any email and password to access the system.
+              Sign in with your registered email and password.
             </p>
           </div>
         </div>
