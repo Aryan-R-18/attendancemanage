@@ -1,4 +1,4 @@
-const API_BASE_URL = 'https://attendance-system-be.vercel.app';
+const API_BASE_URL = 'https://attendance-system-be-ten.vercel.app/';
 
 
 let authToken: string | null = null;
